@@ -1,6 +1,8 @@
 import feedparser
 import smtplib
 import os
+import sys
+import traceback
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.header import Header
@@ -10,32 +12,32 @@ import re
 # ================== 配置区 ==================
 RSS_FILE = 'rss_feeds.txt'
 SMTP_SERVER = 'smtp.163.com'
-SMTP_PORT = 465                  # 改用465端口，隐式SSL更稳定
-TIMEOUT = 15                     # 添加超时，防止长时间卡住
-EMAIL_USER = os.environ['EMAIL_USER']
-EMAIL_PASS = os.environ['EMAIL_PASS']
-RECEIVER = os.environ['RECEIVER_EMAIL']
+SMTP_PORT = 465               # 隐式SSL，减少STARTTLS问题
+TIMEOUT = 15                  # 连接超时
+EMAIL_USER = os.environ.get('EMAIL_USER', '')
+EMAIL_PASS = os.environ.get('EMAIL_PASS', '')
+RECEIVER = os.environ.get('RECEIVER_EMAIL', '')
 # ===========================================
 
 def clean_html(raw_html):
-    """移除HTML标签，保留纯文本，限制长度"""
+    """移除HTML标签，截取前200字符"""
     cleanr = re.compile('<.*?>')
     cleantext = re.sub(cleanr, '', raw_html)
-    return cleantext.strip()[:200]   # 截取前200字，避免邮件过长
+    return cleantext.strip()[:200]
 
 def fetch_entries():
     entries = []
     if not os.path.exists(RSS_FILE):
-        print(f"RSS file {RSS_FILE} not found.")
-        return entries
+        raise FileNotFoundError(f"RSS file {RSS_FILE} not found")
 
     with open(RSS_FILE, 'r', encoding='utf-8') as f:
         urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
 
+    print(f"Found {len(urls)} RSS sources")
     for url in urls:
         try:
             feed = feedparser.parse(url)
-            # 只取最新2条，避免邮件太长
+            # 只取最新2条
             for entry in feed.entries[:2]:
                 title = entry.get('title', 'No title')
                 link = entry.get('link', '')
@@ -51,15 +53,16 @@ def fetch_entries():
                     'source': source
                 })
         except Exception as e:
-            print(f"Failed to fetch {url}: {e}")
+            print(f"⚠️ Failed to fetch {url}: {e}")
 
-    # 按link去重
+    # 根据link去重
     seen = set()
     unique_entries = []
     for e in entries:
         if e['link'] not in seen:
             seen.add(e['link'])
             unique_entries.append(e)
+    print(f"Collected {len(unique_entries)} unique articles")
     return unique_entries
 
 def build_html(entries):
@@ -90,7 +93,9 @@ def build_html(entries):
     return html
 
 def send_email(html_content):
-    """发送HTML邮件，使用465端口+SMTP_SSL，带超时设置"""
+    if not EMAIL_USER or not EMAIL_PASS or not RECEIVER:
+        raise ValueError("Email credentials or receiver not set")
+
     msg = MIMEMultipart('alternative')
     msg['Subject'] = Header(f"每日AI算力&具身智能简报 - {datetime.now().strftime('%Y-%m-%d')}", 'utf-8')
     msg['From'] = EMAIL_USER
@@ -98,27 +103,40 @@ def send_email(html_content):
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
 
     try:
-        # 使用 SMTP_SSL 直接建立加密连接，避免 STARTTLS 被拦截
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=TIMEOUT) as server:
             server.login(EMAIL_USER, EMAIL_PASS)
             server.sendmail(EMAIL_USER, RECEIVER, msg.as_string())
         print("✅ Email sent successfully")
     except smtplib.SMTPAuthenticationError:
-        print("❌ Authentication failed — check EMAIL_USER and EMAIL_PASS (make sure you use authorization code, not login password).")
+        print("❌ Authentication failed — check EMAIL_USER and EMAIL_PASS (use authorization code, not login password)")
+        raise
     except smtplib.SMTPConnectError:
-        print(f"❌ Could not connect to {SMTP_SERVER}:{SMTP_PORT} — check network/port block.")
+        print(f"❌ Could not connect to {SMTP_SERVER}:{SMTP_PORT} — check network/firewall")
+        raise
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
+        raise
 
 if __name__ == '__main__':
-    # 必需环境变量检查
-    for var in ('EMAIL_USER', 'EMAIL_PASS', 'RECEIVER_EMAIL'):
-        if var not in os.environ:
-            raise EnvironmentError(f"Missing required environment variable: {var}")
+    try:
+        print("=== Script started ===")
+        print(f"Python version: {sys.version}")
+        print(f"Working directory: {os.getcwd()}")
+        print(f"Files in directory: {os.listdir('.')}")
 
-    entries = fetch_entries()
-    if entries:
-        html = build_html(entries)
-        send_email(html)
-    else:
-        print("⚠️ No entries found, email not sent.")
+        # 检查环境变量
+        for var in ('EMAIL_USER', 'EMAIL_PASS', 'RECEIVER_EMAIL'):
+            if var not in os.environ:
+                raise EnvironmentError(f"Missing environment variable: {var}")
+        print("Environment variables OK")
+
+        entries = fetch_entries()
+        if entries:
+            html = build_html(entries)
+            send_email(html)
+        else:
+            print("⚠️ No entries found, email not sent.")
+    except Exception as e:
+        print(f"💥 Fatal error: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
