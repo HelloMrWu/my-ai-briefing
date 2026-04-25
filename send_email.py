@@ -9,7 +9,8 @@ import re
 
 # 配置区
 RSS_FILE = 'rss_feeds.txt'
-SMTP_SERVER = 'smtp.qq.com'          # QQ邮箱，若用163则改为smtp.163.com
+SMTP_SERVER = 'smtp.163.com'
+          # 163邮箱，若用163则改为smtp.163.com
 SMTP_PORT = 587
 EMAIL_USER = os.environ['EMAIL_USER']   # GitHub Secret
 EMAIL_PASS = os.environ['EMAIL_PASS']   # GitHub Secret
